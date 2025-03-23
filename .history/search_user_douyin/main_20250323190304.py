@@ -1,5 +1,7 @@
 import asyncio
 import argparse
+import os
+import sys
 import logging
 import time
 import json
@@ -199,7 +201,7 @@ async def retry_search_with_refresh(
 async def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='抖音用户搜索工具')
-    parser.add_argument('--users_file', type=str, default='search_user_douyin/users.txt', help='用户列表文件路径')
+    parser.add_argument('--users_file', type=str, default='users.txt', help='用户列表文件路径')
     parser.add_argument('--headless', action='store_true', help='是否使用无头模式运行浏览器')
     parser.add_argument('--refresh_cookie', action='store_true', help='是否强制刷新Cookie')
     parser.add_argument('--max_retries', type=int, default=3, help='最大重试次数')
@@ -223,73 +225,57 @@ async def main():
     
     logger.info(f"共读取到 {len(users)} 个待搜索用户")
     
-    try:
-        # 如果不需要强制刷新Cookie，则执行带重试的搜索
-        if not args.refresh_cookie:
-            result_stats = await retry_search_with_refresh(
-                users, 
-                headless=args.headless,
-                max_retries=args.max_retries
-            )
-            
-            # 输出统计信息
-            logger.info("======== 搜索任务完成 ========")
-            logger.info(f"总用户数: {result_stats['total_users']}")
-            logger.info(f"成功数量: {result_stats['success']}")
-            logger.info(f"失败数量: {result_stats['fail']}")
-            logger.info(f"重试次数: {result_stats['retries']}")
-            logger.info(f"总耗时: {result_stats['elapsed_time']:.2f} 秒")
-            
-            return 0
+    # 如果不需要强制刷新Cookie，则执行带重试的搜索
+    if not args.refresh_cookie:
+        result_stats = await retry_search_with_refresh(
+            users, 
+            headless=args.headless,
+            max_retries=args.max_retries
+        )
         
-        # 如果需要强制刷新Cookie
-        else:
-            logger.info("准备强制刷新Cookie...")
-            
-            # 初始化Cookie刷新器
-            cookie_refresher = CookieRefresher()
-            
-            # 强制刷新Cookie
-            cookie_str, cookie_dict = await cookie_refresher.refresh_cookies(headless=args.headless)
-            
-            if not cookie_str or not cookie_dict:
-                logger.error("强制刷新Cookie失败，程序退出")
-                return 1
-            
-            logger.info("Cookie强制刷新成功")
-            
-            # 初始化用户搜索器
-            searcher = DouyinUserSearcher(cookie_str, cookie_dict)
-            
-            # 批量搜索用户
-            batch_results = await searcher.save_batch_user_info(users)
-            
-            # 输出统计信息
-            logger.info("======== 搜索任务完成 ========")
-            logger.info(f"总用户数: {len(users)}")
-            logger.info(f"成功数量: {batch_results['success']}")
-            logger.info(f"失败数量: {batch_results['fail']}")
-            
-            # 检查是否有Cookie失效的情况
-            if batch_results["cookie_invalid"]:
-                logger.warning("在搜索过程中检测到Cookie失效")
-                
-            return 0
-        pass
-    except Exception as e:
-        logger.critical(f"程序执行过程中发生未处理的错误: {e}", exc_info=True)
-        return 1
-    finally:
-        # 确保清理所有资源
-        pending = asyncio.all_tasks() - {asyncio.current_task()}
-        for task in pending:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        # 输出统计信息
+        logger.info("======== 搜索任务完成 ========")
+        logger.info(f"总用户数: {result_stats['total_users']}")
+        logger.info(f"成功数量: {result_stats['success']}")
+        logger.info(f"失败数量: {result_stats['fail']}")
+        logger.info(f"重试次数: {result_stats['retries']}")
+        logger.info(f"总耗时: {result_stats['elapsed_time']:.2f} 秒")
+        
+        return 0
     
+    # 如果需要强制刷新Cookie
+    else:
+        logger.info("准备强制刷新Cookie...")
+        
+        # 初始化Cookie刷新器
+        cookie_refresher = CookieRefresher()
+        
+        # 强制刷新Cookie
+        cookie_str, cookie_dict = await cookie_refresher.refresh_cookies(headless=args.headless)
+        
+        if not cookie_str or not cookie_dict:
+            logger.error("强制刷新Cookie失败，程序退出")
+            return 1
+        
+        logger.info("Cookie强制刷新成功")
+        
+        # 初始化用户搜索器
+        searcher = DouyinUserSearcher(cookie_str, cookie_dict)
+        
+        # 批量搜索用户
+        batch_results = await searcher.save_batch_user_info(users)
+        
+        # 输出统计信息
+        logger.info("======== 搜索任务完成 ========")
+        logger.info(f"总用户数: {len(users)}")
+        logger.info(f"成功数量: {batch_results['success']}")
+        logger.info(f"失败数量: {batch_results['fail']}")
+        
+        # 检查是否有Cookie失效的情况
+        if batch_results["cookie_invalid"]:
+            logger.warning("在搜索过程中检测到Cookie失效")
+            
+        return 0
         
 
 if __name__ == "__main__":

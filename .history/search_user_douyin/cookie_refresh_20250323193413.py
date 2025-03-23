@@ -37,151 +37,44 @@ class CookieRefresher:
         self.browser_initialized = False  # 标记浏览器是否已初始化
         
     async def init_browser(self, headless: bool = False) -> None:
-        """初始化浏览器并访问抖音首页"""
-        logger.info(f"开始初始化浏览器，headless模式: {headless}")
-        try:
-            async with async_playwright() as playwright:
-                # 启动浏览器
-                chromium = playwright.chromium
-                self.browser_context = await self.launch_browser(
-                    chromium,
-                    None,
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-                    headless=headless
-                )
-                
-                # 加载stealth.js防止被检测
-                await self.browser_context.add_init_script(path="libs/stealth.min.js")
-                
-                # 创建新页面并访问抖音首页
-                self.context_page = await self.browser_context.new_page()
-                self.context_page.set_default_timeout(30000)  # 30秒
-                
-                try:
-                    # 直接访问抖音主站
-                    logger.info(f"正在访问抖音首页: {self.index_url}")
-                    await self.context_page.goto(self.index_url)
-                    
-                    # 改用domcontentloaded事件而不是networkidle
-                    # networkidle在抖音这样的动态页面上可能永远不会触发
-                    await self.context_page.wait_for_load_state("domcontentloaded", timeout=30000)
-                    logger.info("页面基本内容已加载完成")
-                    
-                    # 额外等待一段时间让页面更完整地加载
-                    await asyncio.sleep(5)
-                    
-                    # 检查登录状态
-                    login_status = await self.check_login_status()
-                    
-                    if login_status == "logged_in":
-                        logger.info("检测到用户已登录")
-                    elif login_status == "login_popup":
-                        logger.info("检测到登录弹窗，需要登录")
-                        # 等待用户登录（最多120秒）
-                        await self.wait_for_user_login(max_wait_time=120)
-                    elif login_status == "no_popup":
-                        logger.info("未检测到登录弹窗，尝试触发登录")
-                        try:
-                            login_button = await self.context_page.query_selector("xpath=//p[text()='登录']")
-                            if login_button:
-                                await login_button.click()
-                                await asyncio.sleep(2)
-                                await self.wait_for_user_login(max_wait_time=120)
-                        except Exception as e:
-                            logger.warning(f"尝试触发登录失败: {e}")
-                    
-                    # 处理可能出现的滑块验证
-                    await handle_slider_verification(self.context_page)
-                    
-                    # 保存Cookie
-                    await self.save_cookies()
-                    
-                except playwright._impl._errors.TimeoutError as te:
-                    # 即使超时也继续处理，因为页面可能已经部分加载
-                    logger.warning(f"页面加载超时，但继续处理: {te}")
-                    # 尝试处理登录和滑块
-                    try:
-                        await handle_slider_verification(self.context_page)
-                        await self.save_cookies()
-                    except Exception as inner_e:
-                        logger.error(f"超时后处理过程中出错: {inner_e}")
-                
-                self.browser_initialized = True
-                return self.browser_context, self.context_page
-                
-        except Exception as e:
-            logger.error(f"初始化浏览器出错: {e}", exc_info=True)
-            # 确保所有资源都被清理
-            if hasattr(self, 'browser_context') and self.browser_context:
-                try:
-                    await self.browser_context.close()
-                except:
-                    pass
-            raise
-
-    async def check_login_status(self) -> str:
-        """检查登录状态"""
-        try:
-            # 先检查页面是否已加载
-            if not self.context_page:
-                return "no_popup"
-                
-            # 检查本地存储中的登录状态（添加错误处理）
-            try:
-                has_user_login = await self.context_page.evaluate("() => (window.localStorage && window.localStorage.getItem('HasUserLogin') === '1') || false")
-                if has_user_login:
-                    return "logged_in"
-            except Exception as e:
-                logger.debug(f"检查本地存储登录状态时出错: {e}")
+    """初始化浏览器并访问抖音首页"""
+    logger.info(f"开始初始化浏览器，headless模式: {headless}")
+    try:
+        async with async_playwright() as playwright:
+            # 启动浏览器
+            chromium = playwright.chromium
+            self.browser_context = await self.launch_browser(
+                chromium,
+                None,
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+                headless=headless
+            )
             
-            # 检查登录弹窗（增加超时和错误处理）
-            try:
-                login_popup = await self.context_page.query_selector("#douyin_login_comp_flat_panel", timeout=3000)
-                if login_popup:
-                    return "login_popup"
-            except Exception as e:
-                logger.debug(f"检查登录弹窗时出错: {e}")
+            # 加载stealth.js防止被检测
+            await self.browser_context.add_init_script(path="libs/stealth.min.js")
             
-            # 检查cookie中的登录状态
-            try:
-                cookies = await self.browser_context.cookies()
-                _, cookie_dict = convert_cookies(cookies)
-                if cookie_dict.get("LOGIN_STATUS") == "1":
-                    return "logged_in"
-            except Exception as e:
-                logger.debug(f"检查Cookie登录状态时出错: {e}")
+            # 创建新页面并访问抖音首页
+            self.context_page = await self.browser_context.new_page()
+            self.context_page.set_default_timeout(30000)  # 30秒
             
-            return "no_popup"
-        except Exception as e:
-            logger.error(f"检查登录状态时出错: {e}")
-            return "no_popup"
-    
-    async def wait_for_user_login(self, max_wait_time: int = 120) -> bool:
-        """等待用户登录
-        
-        Args:
-            max_wait_time: 最大等待时间（秒）
+            # 直接访问抖音主站
+            logger.info(f"正在访问抖音首页: {self.index_url}")
+            response = await self.context_page.goto(self.index_url)
+            await self.context_page.wait_for_load_state("networkidle")
             
-        Returns:
-            是否登录成功
-        """
-        check_interval = 3  # 每3秒检查一次
-        
-        logger.info(f"等待用户登录，最长等待时间: {max_wait_time}秒")
-        
-        for _ in range(max_wait_time // check_interval):
-            # 检查登录状态
-            login_status = await self.check_login_status()
+            # 处理登录弹窗
+            await self.close_login_dialog()
             
-            if login_status == "logged_in":
-                logger.info("用户已成功登录")
-                return True
-                
-            logger.info(f"等待用户登录中... 剩余 {max_wait_time - (_ * check_interval)} 秒")
-            await asyncio.sleep(check_interval)
-        
-        logger.warning("等待登录超时")
-        return False
+            # 处理可能出现的滑块验证
+            await handle_slider_verification(self.context_page)
+            
+            # 保存Cookie
+            await self.save_cookies()
+            
+            return self.browser_context, self.context_page
+    except Exception as e:
+        logger.error(f"初始化浏览器出错: {e}", exc_info=True)
+        raise
     
     async def launch_browser(self, chromium, playwright_proxy, user_agent, headless=False):
         """启动浏览器并创建浏览器上下文"""
@@ -233,26 +126,22 @@ class CookieRefresher:
             return
             
         try:
-            # 获取所有cookie，包括所有域名
+            # 获取所有cookie
+            logger.info("获取当前浏览器上下文的所有Cookie...")
             cookies = await self.browser_context.cookies()
-            
-            # 查找 msToken 相关的 cookie
-            ms_token_cookie = next((c for c in cookies if c.get("name") == "msToken"), None)
-            if ms_token_cookie:
-                logger.info(f"发现 msToken cookie: {ms_token_cookie.get('domain')} - {ms_token_cookie.get('value')[:10]}...")
+            logger.debug(f"获取到 {len(cookies)} 个Cookie")
             
             # 转换格式
             cookie_str, cookie_dict = convert_cookies(cookies)
             
-            # 获取本地存储中的 msToken（如果 cookie 中没有）
-            if "msToken" not in cookie_dict:
-                try:
-                    local_storage = await self.context_page.evaluate("() => window.localStorage")
-                    if "msToken" in local_storage:
-                        cookie_dict["msToken"] = local_storage["msToken"]
-                        logger.info(f"从本地存储中获取到 msToken: {local_storage['msToken'][:10]}...")
-                except Exception as e:
-                    logger.warning(f"获取本地存储中的 msToken 失败: {e}")
+            # 检查关键Cookie是否存在
+            important_keys = ['passport_csrf_token', 'ttwid', 'msToken', 'odin_tt']
+            missing_keys = [key for key in important_keys if key not in cookie_dict]
+            
+            if missing_keys:
+                logger.warning(f"以下重要的Cookie未获取到: {', '.join(missing_keys)}")
+            else:
+                logger.info("已获取所有重要的Cookie")
             
             # 记录Cookie获取时间
             save_data = {
@@ -263,10 +152,20 @@ class CookieRefresher:
             }
             
             # 保存到文件
+            logger.info(f"正在保存Cookie到文件: {self.cookie_file}")
             with open(self.cookie_file, "w", encoding="utf-8") as f:
                 json.dump(save_data, f, ensure_ascii=False, indent=4)
             
             logger.info(f"Cookie已成功保存，包含 {len(cookie_dict)} 个键值对")
+            
+            # 输出一些重要的cookie信息，方便调试
+            for key in important_keys:
+                if key in cookie_dict:
+                    # 只显示部分值，保护隐私
+                    value = cookie_dict[key]
+                    masked_value = value[:4] + "*" * (len(value) - 8) + value[-4:] if len(value) > 8 else "****"
+                    logger.debug(f"Cookie {key}: {masked_value}")
+                
         except Exception as e:
             logger.error(f"保存Cookie时出错: {e}", exc_info=True)
     
@@ -402,23 +301,31 @@ class CookieRefresher:
         
         try:
             if self.browser_initialized and self.context_page:
-                # 浏览器已初始化，直接刷新抖音主页
-                logger.info("刷新抖音主页...")
-                await self.context_page.goto(self.index_url)
+                # 浏览器已初始化，只需刷新页面
+                logger.info("刷新页面获取新Cookie...")
+                await self.context_page.reload()
                 await self.context_page.wait_for_load_state("networkidle")
                 
                 # 处理可能出现的滑块验证
                 await handle_slider_verification(self.context_page)
             else:
                 # 浏览器未初始化，需要初始化
+                logger.info("浏览器未初始化，先初始化浏览器...")
                 await self.init_browser(headless=headless)
                 self.browser_initialized = True
             
             # 保存Cookie
+            logger.info("保存新的Cookie...")
             await self.save_cookies()
             
             # 加载保存的Cookie
             cookie_str, cookie_dict = await self.load_cookies()
+            
+            # 验证Cookie
+            if not await self.is_cookie_valid(cookie_dict):
+                logger.warning("刷新后的Cookie仍然无效")
+            else:
+                logger.info(f"Cookie刷新成功，获取到 {len(cookie_dict)} 个有效Cookie")
             
             return cookie_str, cookie_dict
             

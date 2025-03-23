@@ -57,131 +57,24 @@ class CookieRefresher:
                 self.context_page = await self.browser_context.new_page()
                 self.context_page.set_default_timeout(30000)  # 30秒
                 
-                try:
-                    # 直接访问抖音主站
-                    logger.info(f"正在访问抖音首页: {self.index_url}")
-                    await self.context_page.goto(self.index_url)
-                    
-                    # 改用domcontentloaded事件而不是networkidle
-                    # networkidle在抖音这样的动态页面上可能永远不会触发
-                    await self.context_page.wait_for_load_state("domcontentloaded", timeout=30000)
-                    logger.info("页面基本内容已加载完成")
-                    
-                    # 额外等待一段时间让页面更完整地加载
-                    await asyncio.sleep(5)
-                    
-                    # 检查登录状态
-                    login_status = await self.check_login_status()
-                    
-                    if login_status == "logged_in":
-                        logger.info("检测到用户已登录")
-                    elif login_status == "login_popup":
-                        logger.info("检测到登录弹窗，需要登录")
-                        # 等待用户登录（最多120秒）
-                        await self.wait_for_user_login(max_wait_time=120)
-                    elif login_status == "no_popup":
-                        logger.info("未检测到登录弹窗，尝试触发登录")
-                        try:
-                            login_button = await self.context_page.query_selector("xpath=//p[text()='登录']")
-                            if login_button:
-                                await login_button.click()
-                                await asyncio.sleep(2)
-                                await self.wait_for_user_login(max_wait_time=120)
-                        except Exception as e:
-                            logger.warning(f"尝试触发登录失败: {e}")
-                    
-                    # 处理可能出现的滑块验证
-                    await handle_slider_verification(self.context_page)
-                    
-                    # 保存Cookie
-                    await self.save_cookies()
-                    
-                except playwright._impl._errors.TimeoutError as te:
-                    # 即使超时也继续处理，因为页面可能已经部分加载
-                    logger.warning(f"页面加载超时，但继续处理: {te}")
-                    # 尝试处理登录和滑块
-                    try:
-                        await handle_slider_verification(self.context_page)
-                        await self.save_cookies()
-                    except Exception as inner_e:
-                        logger.error(f"超时后处理过程中出错: {inner_e}")
+                # 直接访问抖音主站
+                logger.info(f"正在访问抖音首页: {self.index_url}")
+                response = await self.context_page.goto(self.index_url)
+                await self.context_page.wait_for_load_state("networkidle")
                 
-                self.browser_initialized = True
+                # 处理登录弹窗
+                await self.close_login_dialog()
+                
+                # 处理可能出现的滑块验证
+                await handle_slider_verification(self.context_page)
+                
+                # 保存Cookie
+                await self.save_cookies()
+                
                 return self.browser_context, self.context_page
-                
         except Exception as e:
             logger.error(f"初始化浏览器出错: {e}", exc_info=True)
-            # 确保所有资源都被清理
-            if hasattr(self, 'browser_context') and self.browser_context:
-                try:
-                    await self.browser_context.close()
-                except:
-                    pass
             raise
-
-    async def check_login_status(self) -> str:
-        """检查登录状态"""
-        try:
-            # 先检查页面是否已加载
-            if not self.context_page:
-                return "no_popup"
-                
-            # 检查本地存储中的登录状态（添加错误处理）
-            try:
-                has_user_login = await self.context_page.evaluate("() => (window.localStorage && window.localStorage.getItem('HasUserLogin') === '1') || false")
-                if has_user_login:
-                    return "logged_in"
-            except Exception as e:
-                logger.debug(f"检查本地存储登录状态时出错: {e}")
-            
-            # 检查登录弹窗（增加超时和错误处理）
-            try:
-                login_popup = await self.context_page.query_selector("#douyin_login_comp_flat_panel", timeout=3000)
-                if login_popup:
-                    return "login_popup"
-            except Exception as e:
-                logger.debug(f"检查登录弹窗时出错: {e}")
-            
-            # 检查cookie中的登录状态
-            try:
-                cookies = await self.browser_context.cookies()
-                _, cookie_dict = convert_cookies(cookies)
-                if cookie_dict.get("LOGIN_STATUS") == "1":
-                    return "logged_in"
-            except Exception as e:
-                logger.debug(f"检查Cookie登录状态时出错: {e}")
-            
-            return "no_popup"
-        except Exception as e:
-            logger.error(f"检查登录状态时出错: {e}")
-            return "no_popup"
-    
-    async def wait_for_user_login(self, max_wait_time: int = 120) -> bool:
-        """等待用户登录
-        
-        Args:
-            max_wait_time: 最大等待时间（秒）
-            
-        Returns:
-            是否登录成功
-        """
-        check_interval = 3  # 每3秒检查一次
-        
-        logger.info(f"等待用户登录，最长等待时间: {max_wait_time}秒")
-        
-        for _ in range(max_wait_time // check_interval):
-            # 检查登录状态
-            login_status = await self.check_login_status()
-            
-            if login_status == "logged_in":
-                logger.info("用户已成功登录")
-                return True
-                
-            logger.info(f"等待用户登录中... 剩余 {max_wait_time - (_ * check_interval)} 秒")
-            await asyncio.sleep(check_interval)
-        
-        logger.warning("等待登录超时")
-        return False
     
     async def launch_browser(self, chromium, playwright_proxy, user_agent, headless=False):
         """启动浏览器并创建浏览器上下文"""
@@ -397,34 +290,34 @@ class CookieRefresher:
             return False
     
     async def refresh_cookies(self, headless: bool = False) -> Tuple[str, Dict]:
-        """刷新Cookie但不关闭浏览器"""
-        logger.info("开始刷新Cookie流程...")
+    """刷新Cookie但不关闭浏览器"""
+    logger.info("开始刷新Cookie流程...")
+    
+    try:
+        if self.browser_initialized and self.context_page:
+            # 浏览器已初始化，直接刷新抖音主页
+            logger.info("刷新抖音主页...")
+            await self.context_page.goto(self.index_url)
+            await self.context_page.wait_for_load_state("networkidle")
+            
+            # 处理可能出现的滑块验证
+            await handle_slider_verification(self.context_page)
+        else:
+            # 浏览器未初始化，需要初始化
+            await self.init_browser(headless=headless)
+            self.browser_initialized = True
         
-        try:
-            if self.browser_initialized and self.context_page:
-                # 浏览器已初始化，直接刷新抖音主页
-                logger.info("刷新抖音主页...")
-                await self.context_page.goto(self.index_url)
-                await self.context_page.wait_for_load_state("networkidle")
-                
-                # 处理可能出现的滑块验证
-                await handle_slider_verification(self.context_page)
-            else:
-                # 浏览器未初始化，需要初始化
-                await self.init_browser(headless=headless)
-                self.browser_initialized = True
-            
-            # 保存Cookie
-            await self.save_cookies()
-            
-            # 加载保存的Cookie
-            cookie_str, cookie_dict = await self.load_cookies()
-            
-            return cookie_str, cookie_dict
-            
-        except Exception as e:
-            logger.error(f"刷新Cookie过程中出错: {e}", exc_info=True)
-            return "", {}
+        # 保存Cookie
+        await self.save_cookies()
+        
+        # 加载保存的Cookie
+        cookie_str, cookie_dict = await self.load_cookies()
+        
+        return cookie_str, cookie_dict
+        
+    except Exception as e:
+        logger.error(f"刷新Cookie过程中出错: {e}", exc_info=True)
+        return "", {}
     
     async def get_valid_cookies(self, headless: bool = False) -> Tuple[str, Dict]:
         """获取有效的Cookie，如果当前Cookie无效则刷新"""

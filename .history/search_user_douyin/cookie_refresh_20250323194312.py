@@ -120,42 +120,41 @@ class CookieRefresher:
             raise
 
     async def check_login_status(self) -> str:
-        """检查登录状态"""
+    """检查登录状态"""
+    try:
+        # 先检查页面是否已加载
+        if not self.context_page:
+            return "no_popup"
+            
+        # 检查本地存储中的登录状态（添加错误处理）
         try:
-            # 先检查页面是否已加载
-            if not self.context_page:
-                return "no_popup"
-                
-            # 检查本地存储中的登录状态（添加错误处理）
-            try:
-                has_user_login = await self.context_page.evaluate("() => (window.localStorage && window.localStorage.getItem('HasUserLogin') === '1') || false")
-                if has_user_login:
-                    return "logged_in"
-            except Exception as e:
-                logger.debug(f"检查本地存储登录状态时出错: {e}")
-            
-            # 检查登录弹窗（增加超时和错误处理）
-            try:
-                login_popup = await self.context_page.query_selector("#douyin_login_comp_flat_panel", timeout=3000)
-                if login_popup:
-                    return "login_popup"
-            except Exception as e:
-                logger.debug(f"检查登录弹窗时出错: {e}")
-            
-            # 检查cookie中的登录状态
-            try:
-                cookies = await self.browser_context.cookies()
-                _, cookie_dict = convert_cookies(cookies)
-                if cookie_dict.get("LOGIN_STATUS") == "1":
-                    return "logged_in"
-            except Exception as e:
-                logger.debug(f"检查Cookie登录状态时出错: {e}")
-            
-            return "no_popup"
+            has_user_login = await self.context_page.evaluate("() => (window.localStorage && window.localStorage.getItem('HasUserLogin') === '1') || false")
+            if has_user_login:
+                return "logged_in"
         except Exception as e:
-            logger.error(f"检查登录状态时出错: {e}")
-            return "no_popup"
-    
+            logger.debug(f"检查本地存储登录状态时出错: {e}")
+        
+        # 检查登录弹窗（增加超时和错误处理）
+        try:
+            login_popup = await self.context_page.query_selector("#douyin_login_comp_flat_panel", timeout=3000)
+            if login_popup:
+                return "login_popup"
+        except Exception as e:
+            logger.debug(f"检查登录弹窗时出错: {e}")
+        
+        # 检查cookie中的登录状态
+        try:
+            cookies = await self.browser_context.cookies()
+            _, cookie_dict = convert_cookies(cookies)
+            if cookie_dict.get("LOGIN_STATUS") == "1":
+                return "logged_in"
+        except Exception as e:
+            logger.debug(f"检查Cookie登录状态时出错: {e}")
+        
+        return "no_popup"
+    except Exception as e:
+        logger.error(f"检查登录状态时出错: {e}")
+        return "no_popup"
     async def wait_for_user_login(self, max_wait_time: int = 120) -> bool:
         """等待用户登录
         

@@ -21,7 +21,7 @@ from typing import List
 import config
 from cache.abs_cache import AbstractCache
 from cache.cache_factory import CacheFactory
-from tools.utils import *
+from tools.utils import utils
 
 from .types import IpInfoModel
 

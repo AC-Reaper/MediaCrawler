@@ -57,105 +57,79 @@ class CookieRefresher:
                 self.context_page = await self.browser_context.new_page()
                 self.context_page.set_default_timeout(30000)  # 30秒
                 
-                try:
-                    # 直接访问抖音主站
-                    logger.info(f"正在访问抖音首页: {self.index_url}")
-                    await self.context_page.goto(self.index_url)
-                    
-                    # 改用domcontentloaded事件而不是networkidle
-                    # networkidle在抖音这样的动态页面上可能永远不会触发
-                    await self.context_page.wait_for_load_state("domcontentloaded", timeout=30000)
-                    logger.info("页面基本内容已加载完成")
-                    
-                    # 额外等待一段时间让页面更完整地加载
-                    await asyncio.sleep(5)
-                    
-                    # 检查登录状态
-                    login_status = await self.check_login_status()
-                    
-                    if login_status == "logged_in":
-                        logger.info("检测到用户已登录")
-                    elif login_status == "login_popup":
-                        logger.info("检测到登录弹窗，需要登录")
-                        # 等待用户登录（最多120秒）
-                        await self.wait_for_user_login(max_wait_time=120)
-                    elif login_status == "no_popup":
-                        logger.info("未检测到登录弹窗，尝试触发登录")
-                        try:
-                            login_button = await self.context_page.query_selector("xpath=//p[text()='登录']")
-                            if login_button:
-                                await login_button.click()
-                                await asyncio.sleep(2)
-                                await self.wait_for_user_login(max_wait_time=120)
-                        except Exception as e:
-                            logger.warning(f"尝试触发登录失败: {e}")
-                    
+                # 直接访问抖音主站
+                logger.info(f"正在访问抖音首页: {self.index_url}")
+                await self.context_page.goto(self.index_url)
+                await self.context_page.wait_for_load _state("networkidle")
+                
+                # 检查登录状态
+                login_status = await self.check_login_status()
+                
+                if login_status == "logged_in":
+                    logger.info("检测到用户已登录")
                     # 处理可能出现的滑块验证
                     await handle_slider_verification(self.context_page)
                     
-                    # 保存Cookie
-                    await self.save_cookies()
+                elif login_status == "login_popup":
+                    logger.info("检测到登录弹窗，需要登录")
+                    # 等待用户登录（最多120秒）
+                    await self.wait_for_user_login(max_wait_time=120)
                     
-                except playwright._impl._errors.TimeoutError as te:
-                    # 即使超时也继续处理，因为页面可能已经部分加载
-                    logger.warning(f"页面加载超时，但继续处理: {te}")
-                    # 尝试处理登录和滑块
+                elif login_status == "no_popup":
+                    logger.info("未检测到登录弹窗，当前可能是游客状态")
+                    # 尝试点击登录按钮触发登录弹窗
                     try:
-                        await handle_slider_verification(self.context_page)
-                        await self.save_cookies()
-                    except Exception as inner_e:
-                        logger.error(f"超时后处理过程中出错: {inner_e}")
+                        login_button = await self.context_page.query_selector("xpath=//p[text()='登录']")
+                        if login_button:
+                            logger.info("点击登录按钮触发登录弹窗")
+                            await login_button.click()
+                            await asyncio.sleep(1)
+                            await self.wait_for_user_login(max_wait_time=120)
+                        else:
+                            logger.warning("未找到登录按钮，可能已在游客状态")
+                    except Exception as e:
+                        logger.warning(f"尝试点击登录按钮失败: {e}")
                 
-                self.browser_initialized = True
+                # 处理可能出现的滑块验证
+                await handle_slider_verification(self.context_page)
+                
+                # 保存Cookie
+                await self.save_cookies()
+                
                 return self.browser_context, self.context_page
-                
         except Exception as e:
             logger.error(f"初始化浏览器出错: {e}", exc_info=True)
-            # 确保所有资源都被清理
-            if hasattr(self, 'browser_context') and self.browser_context:
-                try:
-                    await self.browser_context.close()
-                except:
-                    pass
             raise
 
     async def check_login_status(self) -> str:
-        """检查登录状态"""
+        """检查登录状态
+        返回:
+            'logged_in': 已登录
+            'login_popup': 有登录弹窗
+            'no_popup': 无登录弹窗，可能是游客状态
+        """
         try:
-            # 先检查页面是否已加载
-            if not self.context_page:
-                return "no_popup"
-                
-            # 检查本地存储中的登录状态（添加错误处理）
-            try:
-                has_user_login = await self.context_page.evaluate("() => (window.localStorage && window.localStorage.getItem('HasUserLogin') === '1') || false")
-                if has_user_login:
-                    return "logged_in"
-            except Exception as e:
-                logger.debug(f"检查本地存储登录状态时出错: {e}")
+            # 检查本地存储中的登录状态
+            has_user_login = await self.context_page.evaluate("() => window.localStorage.getItem('HasUserLogin') === '1'")
+            if has_user_login:
+                return "logged_in"
             
-            # 检查登录弹窗（增加超时和错误处理）
-            try:
-                login_popup = await self.context_page.query_selector("#douyin_login_comp_flat_panel", timeout=3000)
-                if login_popup:
-                    return "login_popup"
-            except Exception as e:
-                logger.debug(f"检查登录弹窗时出错: {e}")
+            # 检查登录弹窗
+            login_popup = await self.context_page.query_selector("#douyin_login_comp_flat_panel")
+            if login_popup:
+                return "login_popup"
             
             # 检查cookie中的登录状态
-            try:
-                cookies = await self.browser_context.cookies()
-                _, cookie_dict = convert_cookies(cookies)
-                if cookie_dict.get("LOGIN_STATUS") == "1":
-                    return "logged_in"
-            except Exception as e:
-                logger.debug(f"检查Cookie登录状态时出错: {e}")
+            cookies = await self.browser_context.cookies()
+            _, cookie_dict = convert_cookies(cookies)
+            if cookie_dict.get("LOGIN_STATUS") == "1":
+                return "logged_in"
             
             return "no_popup"
         except Exception as e:
             logger.error(f"检查登录状态时出错: {e}")
             return "no_popup"
-    
+
     async def wait_for_user_login(self, max_wait_time: int = 120) -> bool:
         """等待用户登录
         
